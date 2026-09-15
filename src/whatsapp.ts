@@ -17,6 +17,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
+import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -28,7 +29,6 @@ const logger = pino({ level: "silent" });
 const nameCache = new Map<string, string>();
 
 let currentSock: WASocket | null = null;
-let pairingStarted = false;
 
 export function getSocket(): WASocket | null {
   return currentSock;
@@ -202,22 +202,29 @@ async function getPhoneNumber(): Promise<string> {
   return phone;
 }
 
-async function startPairing(sock: WASocket): Promise<void> {
-  if (sock.authState.creds.registered || pairingStarted) return;
-  pairingStarted = true;
+function formatPairingCode(code: string): string {
+  return code.replace(/(.{4})/g, "$1-").replace(/-$/, "");
+}
 
-  const phone = await getPhoneNumber();
+async function requestAndPrintPairingCode(sock: WASocket, phone: string): Promise<void> {
+  if (sock.authState.creds.registered) return;
+
   console.log(`Requesting a pairing code for +${phone} (no QR)...`);
-  await sleep(2500);
+  await sleep(5000);
+  if (sock.authState.creds.registered) return;
+
   const code = await sock.requestPairingCode(phone);
-  const pretty = code.replace(/(.{4})/g, "$1-").replace(/-$/, "");
   console.log(`
-Enter this code in WhatsApp — no QR scan:
+============================================================
+  PAIRING CODE:  ${formatPairingCode(code)}
+============================================================
 
-  ${pretty}
+Enter it here (you have about 60 seconds):
+  WhatsApp → Settings → Linked devices → Link a device
+  → Link with phone number instead
 
-On the phone that owns this number:
-  WhatsApp → Settings → Linked devices → Link a device → Link with phone number instead
+Keep THIS window open. Do not press Ctrl+C.
+If the code expires, a new one will be printed automatically.
 `);
 }
 
@@ -231,108 +238,142 @@ function rememberContacts(
 
 export async function connectWhatsApp(): Promise<WASocket> {
   const { version } = await fetchLatestBaileysVersion();
+  const { state: initialState } = await useMultiFileAuthState(AUTH_DIR);
+
+  let phone = "";
+  if (!initialState.creds.registered) {
+    phone = await getPhoneNumber();
+    if (fs.existsSync(AUTH_DIR)) {
+      console.log("Clearing incomplete login files so the pairing code is not killed immediately...");
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    }
+  }
 
   return new Promise<WASocket>((resolve, reject) => {
     let settled = false;
+    let starting = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleReconnect = (delayMs: number, reason: string): void => {
+      if (reconnectTimer) return;
+      console.log(`${reason} Retrying in ${Math.round(delayMs / 1000)}s. Do not press Ctrl+C.`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        void start();
+      }, delayMs);
+    };
 
     const start = async (): Promise<void> => {
-      const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+      if (starting) return;
+      starting = true;
 
-      const sock = makeWASocket({
-        version,
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, logger),
-        },
-        logger,
-        browser: Browsers.windows("Chrome"),
-        syncFullHistory: false,
-      });
+      try {
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
-      sock.ev.on("creds.update", saveCreds);
+        const sock = makeWASocket({
+          version,
+          auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, logger),
+          },
+          logger,
+          browser: Browsers.ubuntu("Chrome"),
+          syncFullHistory: false,
+        });
 
-      startPairing(sock).catch((err) => {
-        if (!settled) {
-          settled = true;
-          reject(err);
-        } else {
-          console.error("Pairing failed:", err);
-        }
-      });
+        sock.ev.on("creds.update", saveCreds);
 
-      sock.ev.on("contacts.upsert", rememberContacts);
-      sock.ev.on("contacts.update", rememberContacts);
+        sock.ev.on("contacts.upsert", rememberContacts);
+        sock.ev.on("contacts.update", rememberContacts);
 
-      sock.ev.on("chats.upsert", (chats) => {
-        for (const chat of chats) {
-          cacheName(chat.id, chat.name);
-        }
-      });
-
-      sock.ev.on("chats.update", (updates) => {
-        for (const chat of updates) {
-          cacheName(chat.id, chat.name);
-        }
-      });
-
-      sock.ev.on("groups.update", (updates) => {
-        for (const group of updates) {
-          cacheName(group.id, group.subject);
-        }
-      });
-
-      sock.ev.on("messages.upsert", ({ messages }) => {
-        for (const message of messages) {
-          persistWaMessage(message);
-        }
-      });
-
-      sock.ev.on("messaging-history.set", ({ messages }) => {
-        for (const message of messages) {
-          persistWaMessage(message);
-        }
-      });
-
-      sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === "open") {
-          currentSock = sock;
-          console.log("WhatsApp connected (staying online like WhatsApp Web).");
-          if (!settled) {
-            settled = true;
-            resolve(sock);
+        sock.ev.on("chats.upsert", (chats) => {
+          for (const chat of chats) {
+            cacheName(chat.id, chat.name);
           }
-        }
+        });
 
-        if (connection === "close") {
+        sock.ev.on("chats.update", (updates) => {
+          for (const chat of updates) {
+            cacheName(chat.id, chat.name);
+          }
+        });
+
+        sock.ev.on("groups.update", (updates) => {
+          for (const group of updates) {
+            cacheName(group.id, group.subject);
+          }
+        });
+
+        sock.ev.on("messages.upsert", ({ messages }) => {
+          for (const message of messages) {
+            persistWaMessage(message);
+          }
+        });
+
+        sock.ev.on("messaging-history.set", ({ messages }) => {
+          for (const message of messages) {
+            persistWaMessage(message);
+          }
+        });
+
+        sock.ev.on("connection.update", (update) => {
+          const { connection, lastDisconnect } = update;
+
+          if (connection === "open") {
+            currentSock = sock;
+            console.log("WhatsApp connected (staying online like WhatsApp Web).");
+            if (!settled) {
+              settled = true;
+              resolve(sock);
+            }
+            return;
+          }
+
+          if (connection !== "close") return;
+
+          starting = false;
           const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+          const registered = sock.authState.creds.registered;
           const loggedOut = statusCode === DisconnectReason.loggedOut;
 
-          if (loggedOut) {
+          if (loggedOut && registered) {
             console.error(
-              "Logged out. Delete the ./auth folder, set WHATSAPP_PHONE in .env, and run again to get a new pairing code.",
+              "Logged out. Delete the ./auth folder, set WHATSAPP_PHONE in .env, and run again.",
             );
             if (!settled) {
               settled = true;
               reject(new Error("WhatsApp session logged out"));
             }
             process.exit(1);
+            return;
           }
 
-          console.log("Connection closed. Reconnecting in 2s...");
-          setTimeout(() => {
-            start().catch((err) => {
-              if (!settled) {
-                settled = true;
-                reject(err);
-              } else {
-                console.error("Reconnect failed:", err);
-              }
-            });
-          }, 2000);
+          if (!registered) {
+            scheduleReconnect(
+              8000,
+              "Still waiting for the pairing code (WhatsApp closed the socket — that is normal).",
+            );
+            return;
+          }
+
+          scheduleReconnect(2000, "Connection closed.");
+        });
+
+        if (!state.creds.registered && phone) {
+          requestAndPrintPairingCode(sock, phone).catch((err) => {
+            console.error("Could not request a pairing code:", err);
+            starting = false;
+            scheduleReconnect(8000, "Pairing request failed.");
+          });
         }
-      });
+      } catch (err) {
+        starting = false;
+        if (!settled) {
+          scheduleReconnect(8000, "Socket failed to start.");
+        } else {
+          console.error("Reconnect failed:", err);
+        }
+      }
     };
 
     start().catch((err) => {

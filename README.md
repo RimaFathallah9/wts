@@ -42,7 +42,9 @@ WHATSAPP_PHONE=351912345678
 npm run start
 ```
 
-The terminal prints an 8-digit code like `ABCD-1234`. On the phone that owns the number:
+The terminal prints an 8-digit code like `ABCD-1234`. **Leave the window open** — do not press Ctrl+C. WhatsApp often drops the socket while you type; the app now waits and prints a new code if the old one expires.
+
+On the phone that owns the number:
 
 **WhatsApp → Settings → Linked devices → Link a device → Link with phone number instead**
 
