@@ -6,5 +6,8 @@ auth/
 *.db-wal
 *.db-shm
 latest-summary.md
+chrome-profile/
+.wwebjs_auth/
+.wwebjs_cache/
 .DS_Store
 Thumbs.db

@@ -17,27 +17,21 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
-import qrcode from "qrcode-terminal";
 import path from "node:path";
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { insertMessage } from "./db.js";
+import { chunkWhatsAppText } from "./format.js";
 
 const AUTH_DIR = path.resolve(process.cwd(), "auth");
 const logger = pino({ level: "silent" });
 const nameCache = new Map<string, string>();
-const WA_TEXT_LIMIT = 4000;
 
 let currentSock: WASocket | null = null;
+let pairingStarted = false;
 
 export function getSocket(): WASocket | null {
   return currentSock;
-}
-
-export function toWhatsAppText(markdown: string): string {
-  return markdown
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*\*(.+?)\*\*/g, "*$1*")
-    .replace(/`([^`]+)`/g, "$1")
-    .trim();
 }
 
 export async function sendSummaryToSelf(markdown: string): Promise<void> {
@@ -47,15 +41,7 @@ export async function sendSummaryToSelf(markdown: string): Promise<void> {
   }
 
   const jid = jidNormalizedUser(sock.user.id);
-  const text = toWhatsAppText(markdown);
-  const chunks =
-    text.length <= WA_TEXT_LIMIT
-      ? [text]
-      : Array.from({ length: Math.ceil(text.length / WA_TEXT_LIMIT) }, (_, i) =>
-          text.slice(i * WA_TEXT_LIMIT, (i + 1) * WA_TEXT_LIMIT),
-        );
-
-  for (const chunk of chunks) {
+  for (const chunk of chunkWhatsAppText(markdown)) {
     await sock.sendMessage(jid, { text: chunk });
   }
 
@@ -180,6 +166,61 @@ function persistWaMessage(msg: WAMessage): void {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function digitsOnly(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+async function getPhoneNumber(): Promise<string> {
+  const fromEnv = process.env.WHATSAPP_PHONE?.trim();
+  if (fromEnv) {
+    const phone = digitsOnly(fromEnv);
+    if (phone.length < 8) {
+      throw new Error("WHATSAPP_PHONE must include country code, digits only, e.g. 351912345678");
+    }
+    return phone;
+  }
+
+  if (!input.isTTY) {
+    throw new Error(
+      "Set WHATSAPP_PHONE in .env (country code + number, no + or spaces), then run again. No QR code is used.",
+    );
+  }
+
+  const rl = readline.createInterface({ input, output });
+  const raw = await rl.question(
+    "Phone number with country code (digits only, e.g. 351912345678): ",
+  );
+  rl.close();
+  const phone = digitsOnly(raw);
+  if (phone.length < 8) {
+    throw new Error("That number looks too short. Include the country code.");
+  }
+  return phone;
+}
+
+async function startPairing(sock: WASocket): Promise<void> {
+  if (sock.authState.creds.registered || pairingStarted) return;
+  pairingStarted = true;
+
+  const phone = await getPhoneNumber();
+  console.log(`Requesting a pairing code for +${phone} (no QR)...`);
+  await sleep(2500);
+  const code = await sock.requestPairingCode(phone);
+  const pretty = code.replace(/(.{4})/g, "$1-").replace(/-$/, "");
+  console.log(`
+Enter this code in WhatsApp — no QR scan:
+
+  ${pretty}
+
+On the phone that owns this number:
+  WhatsApp → Settings → Linked devices → Link a device → Link with phone number instead
+`);
+}
+
 function rememberContacts(
   contacts: Array<{ id?: string | null; notify?: string | null; name?: string | null; verifiedName?: string | null }>,
 ): void {
@@ -209,6 +250,15 @@ export async function connectWhatsApp(): Promise<WASocket> {
       });
 
       sock.ev.on("creds.update", saveCreds);
+
+      startPairing(sock).catch((err) => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+        } else {
+          console.error("Pairing failed:", err);
+        }
+      });
 
       sock.ev.on("contacts.upsert", rememberContacts);
       sock.ev.on("contacts.update", rememberContacts);
@@ -244,14 +294,7 @@ export async function connectWhatsApp(): Promise<WASocket> {
       });
 
       sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-          console.log("\nScan this QR with the WhatsApp app on the phone that owns this number.");
-          console.log("WhatsApp Web cannot scan it. On the phone: Linked devices → Link a device.\n");
-          qrcode.generate(qr, { small: true });
-          console.log("");
-        }
+        const { connection, lastDisconnect } = update;
 
         if (connection === "open") {
           currentSock = sock;
@@ -268,7 +311,7 @@ export async function connectWhatsApp(): Promise<WASocket> {
 
           if (loggedOut) {
             console.error(
-              "Logged out. Delete the ./auth folder and run again to scan a new QR code.",
+              "Logged out. Delete the ./auth folder, set WHATSAPP_PHONE in .env, and run again to get a new pairing code.",
             );
             if (!settled) {
               settled = true;

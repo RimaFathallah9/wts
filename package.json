@@ -8,6 +8,7 @@
     "start": "tsx src/index.ts",
     "start:watch": "tsx src/index.ts",
     "start:once": "tsx src/index.ts --once",
+    "start:web": "tsx src/index.ts --web",
     "build": "tsc"
   },
   "engines": {
@@ -21,7 +22,8 @@
     "dotenv": "^16.6.1",
     "pino": "^9.9.0",
     "qrcode-terminal": "^0.12.0",
-    "tsx": "^4.20.5"
+    "tsx": "^4.20.5",
+    "whatsapp-web.js": "^1.34.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

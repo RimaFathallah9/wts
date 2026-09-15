@@ -3,14 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { closeDb, getMessagesLastTwoHours, groupMessagesByChat, initDb } from "./db.js";
 import { summarizeLastTwoHours } from "./summarize.js";
-import { connectWhatsApp, sendSummaryToSelf } from "./whatsapp.js";
+import { connectWhatsApp, sendSummaryToSelf as sendViaBaileys } from "./whatsapp.js";
 
 const SUMMARY_FILE = path.resolve(process.cwd(), "latest-summary.md");
 const ONCE = process.argv.includes("--once");
+const USE_WEB = process.argv.includes("--web") || process.env.WHATSAPP_AUTH === "web";
 const INTERVAL_MS = 5 * 60 * 1000;
 const READY_DELAY_MS = 12_000;
 
 let summarizing = false;
+let sendSummaryToSelf: (markdown: string) => Promise<void> = sendViaBaileys;
 
 function printSummary(markdown: string): void {
   const bar = "═".repeat(64);
@@ -56,7 +58,15 @@ async function main(): Promise<void> {
 
   initDb();
   console.log("Connecting to WhatsApp...");
-  await connectWhatsApp();
+
+  if (USE_WEB) {
+    const web = await import("./whatsapp-web.js");
+    await web.connectWhatsAppWeb();
+    sendSummaryToSelf = web.sendSummaryToSelf;
+  } else {
+    await connectWhatsApp();
+    sendSummaryToSelf = sendViaBaileys;
+  }
 
   console.log(`Waiting ${READY_DELAY_MS / 1000}s for recent chats to arrive...`);
   await sleep(READY_DELAY_MS);

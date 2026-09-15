@@ -1,20 +1,20 @@
 # WhatsApp "Most Important Message" Agent
 
-Connects to your WhatsApp account via WhatsApp Web, stores incoming text (and media placeholders) in a local SQLite database, then asks Claude which single conversation from the last 2 hours actually matters.
+Connects to your WhatsApp account, stores incoming text (and media placeholders) in a local SQLite database, then asks Claude which single conversation from the last 2 hours actually matters.
 
 ## Disclaimer — read this first
 
-**Baileys is an unofficial library.** It reverse-engineers WhatsApp Web. Using it **violates WhatsApp's Terms of Service**. Meta can **ban, flag, or restrict the linked number at any time**, without warning.
+**This uses unofficial WhatsApp Web libraries.** They reverse-engineer WhatsApp Web. Using them **violates WhatsApp's Terms of Service**. Meta can **ban, flag, or restrict the linked number at any time**, without warning.
 
 **Do not use this on a primary personal or business number.** Use a secondary / throwaway WhatsApp account you can afford to lose. This project is for personal triage on a number you control. It is not affiliated with WhatsApp or Meta.
 
 ## What it does
 
-1. Logs in with a QR code (session saved in `./auth` so you do not rescan every run).
+1. Logs in **without a QR code** (pairing code, or your existing Chrome WhatsApp Web session).
 2. Listens for incoming messages and writes them to `messages.db`.
 3. Pulls everything from the last 2 hours, grouped by chat.
 4. Sends that batch to Claude (`claude-sonnet-4-6`) to pick the most urgent thread and list other notable items.
-5. Prints the result, overwrites `latest-summary.md`, and sends the same summary to **your own WhatsApp chat** so you can read it in WhatsApp Web.
+5. Prints the result, overwrites `latest-summary.md`, and sends the same summary to **your own WhatsApp chat**.
 
 ## Setup
 
@@ -25,21 +25,47 @@ npm install
 copy .env.example .env
 ```
 
-On macOS/Linux use `cp .env.example .env`. Then put your Anthropic key in `.env`:
+On macOS/Linux use `cp .env.example .env`. Then edit `.env`:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
+WHATSAPP_PHONE=351912345678
 ```
 
-## Run
+`WHATSAPP_PHONE` is country code + number, digits only (no `+` or spaces).
 
-Stay connected like WhatsApp Web, store incoming chats, and send a summary to yourself every 5 minutes:
+## Login (no QR)
+
+### Option A — pairing code (default)
 
 ```bash
 npm run start
 ```
 
-Leave this window open. Then open [WhatsApp Web](https://web.whatsapp.com) and look at the chat with **yourself** — that is where the “most important” summary appears.
+The terminal prints an 8-digit code like `ABCD-1234`. On the phone that owns the number:
+
+**WhatsApp → Settings → Linked devices → Link a device → Link with phone number instead**
+
+Type that code. Do not scan a QR.
+
+If `./auth` already exists from a previous login, it reconnects with no code.
+
+### Option B — existing WhatsApp Web in Chrome
+
+If you already use [web.whatsapp.com](https://web.whatsapp.com) in Chrome:
+
+1. **Quit Chrome completely** (all windows).
+2. Run:
+
+```bash
+npm run start:web
+```
+
+That reuses your Chrome WhatsApp Web login. No QR, no pairing code. If Chrome is still open, Windows will block the profile — close it first.
+
+## Run
+
+`npm run start` (or `start:web`) stays connected and sends a summary to your own chat every 5 minutes. Leave the window open and read the note in WhatsApp Web under the chat with **yourself**.
 
 One-shot (connect, summarize, send, then exit):
 
@@ -47,28 +73,26 @@ One-shot (connect, summarize, send, then exit):
 npm run start:once
 ```
 
-**Phone vs WhatsApp Web:** WhatsApp still requires the **phone app once** to link a new device. WhatsApp Web cannot scan the QR. After that first link, this tool stays logged in on this PC (session in `./auth`) and you can ignore the phone for daily use.
-
-First run prints a QR code. On the phone that owns the number: **WhatsApp → Settings → Linked devices → Link a device**, then scan it.
-
 ## Re-auth
 
-If the session dies, WhatsApp logs you out, or the QR never completes:
+If the session dies:
 
 1. Stop the process.
-2. Delete the `auth` folder.
-3. Run `npm run start` (or `start:watch`) again and scan a new QR.
+2. Delete the `auth` folder (pairing) or fix Chrome login (web mode).
+3. Set `WHATSAPP_PHONE` in `.env`.
+4. Run `npm run start` again and enter the new pairing code.
 
-Do not commit `auth/`, `.env`, or `messages.db`. They are gitignored.
+Do not commit `auth/`, `.env`, `messages.db`, or Chrome profile folders. They are gitignored.
 
 ## Project layout
 
 | Path | Role |
 | --- | --- |
-| `src/index.ts` | Startup; stays online unless `--once` |
-| `src/whatsapp.ts` | Baileys connection, QR login, message listener |
+| `src/index.ts` | Startup; pairing vs `--web`; stays online unless `--once` |
+| `src/whatsapp.ts` | Baileys connection, pairing-code login, message listener |
+| `src/whatsapp-web.ts` | Existing Chrome WhatsApp Web session |
 | `src/db.ts` | SQLite schema and last-2-hours query |
 | `src/summarize.ts` | Claude ranking + markdown summary |
-| `.env.example` | `ANTHROPIC_API_KEY=` |
+| `.env.example` | `ANTHROPIC_API_KEY=` and `WHATSAPP_PHONE=` |
 
 Media binaries are not stored. Image/audio/video/etc. become placeholders such as `[image]` or `[voice note]`.
