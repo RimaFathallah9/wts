@@ -8,6 +8,7 @@ import makeWASocket, {
   isJidGroup,
   isJidNewsletter,
   isJidStatusBroadcast,
+  jidNormalizedUser,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
   type proto,
@@ -23,6 +24,43 @@ import { insertMessage } from "./db.js";
 const AUTH_DIR = path.resolve(process.cwd(), "auth");
 const logger = pino({ level: "silent" });
 const nameCache = new Map<string, string>();
+const WA_TEXT_LIMIT = 4000;
+
+let currentSock: WASocket | null = null;
+
+export function getSocket(): WASocket | null {
+  return currentSock;
+}
+
+export function toWhatsAppText(markdown: string): string {
+  return markdown
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "*$1*")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+}
+
+export async function sendSummaryToSelf(markdown: string): Promise<void> {
+  const sock = currentSock;
+  if (!sock?.user?.id) {
+    throw new Error("WhatsApp is not connected yet.");
+  }
+
+  const jid = jidNormalizedUser(sock.user.id);
+  const text = toWhatsAppText(markdown);
+  const chunks =
+    text.length <= WA_TEXT_LIMIT
+      ? [text]
+      : Array.from({ length: Math.ceil(text.length / WA_TEXT_LIMIT) }, (_, i) =>
+          text.slice(i * WA_TEXT_LIMIT, (i + 1) * WA_TEXT_LIMIT),
+        );
+
+  for (const chunk of chunks) {
+    await sock.sendMessage(jid, { text: chunk });
+  }
+
+  console.log(`Sent summary to your own WhatsApp chat (${jid}). Open WhatsApp Web to read it.`);
+}
 
 function cacheName(jid: string | undefined | null, name: string | undefined | null): void {
   if (!jid || !name) return;
@@ -166,7 +204,7 @@ export async function connectWhatsApp(): Promise<WASocket> {
           keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
         logger,
-        browser: Browsers.ubuntu("WTS Important Message"),
+        browser: Browsers.windows("Chrome"),
         syncFullHistory: false,
       });
 
@@ -209,13 +247,15 @@ export async function connectWhatsApp(): Promise<WASocket> {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-          console.log("\nScan this QR code in WhatsApp → Linked devices:\n");
+          console.log("\nScan this QR with the WhatsApp app on the phone that owns this number.");
+          console.log("WhatsApp Web cannot scan it. On the phone: Linked devices → Link a device.\n");
           qrcode.generate(qr, { small: true });
           console.log("");
         }
 
         if (connection === "open") {
-          console.log("WhatsApp connected.");
+          currentSock = sock;
+          console.log("WhatsApp connected (staying online like WhatsApp Web).");
           if (!settled) {
             settled = true;
             resolve(sock);

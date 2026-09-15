@@ -3,10 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { closeDb, getMessagesLastTwoHours, groupMessagesByChat, initDb } from "./db.js";
 import { summarizeLastTwoHours } from "./summarize.js";
-import { connectWhatsApp } from "./whatsapp.js";
+import { connectWhatsApp, sendSummaryToSelf } from "./whatsapp.js";
 
 const SUMMARY_FILE = path.resolve(process.cwd(), "latest-summary.md");
-const WATCH = process.argv.includes("--watch");
+const ONCE = process.argv.includes("--once");
 const INTERVAL_MS = 5 * 60 * 1000;
 const READY_DELAY_MS = 12_000;
 
@@ -36,6 +36,7 @@ async function runSummary(): Promise<void> {
     fs.writeFileSync(SUMMARY_FILE, `${markdown}\n`, "utf8");
     printSummary(markdown);
     console.log(`Wrote ${SUMMARY_FILE}`);
+    await sendSummaryToSelf(markdown);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] Summary failed:`, err);
   } finally {
@@ -62,13 +63,15 @@ async function main(): Promise<void> {
 
   await runSummary();
 
-  if (!WATCH) {
-    console.log("One-shot run finished. Use `npm run start:watch` to keep listening and re-summarize every 5 minutes.");
+  if (ONCE) {
+    console.log("One-shot run finished.");
     closeDb();
     process.exit(0);
   }
 
-  console.log("Watch mode on — storing incoming messages and summarizing every 5 minutes.");
+  console.log(
+    "Staying connected like WhatsApp Web. Summaries go to your own chat every 5 minutes — read them in WhatsApp Web.",
+  );
   setInterval(() => {
     void runSummary();
   }, INTERVAL_MS);

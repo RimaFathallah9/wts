@@ -14,7 +14,7 @@ Connects to your WhatsApp account via WhatsApp Web, stores incoming text (and me
 2. Listens for incoming messages and writes them to `messages.db`.
 3. Pulls everything from the last 2 hours, grouped by chat.
 4. Sends that batch to Claude (`claude-sonnet-4-6`) to pick the most urgent thread and list other notable items.
-5. Prints the result and overwrites `latest-summary.md`.
+5. Prints the result, overwrites `latest-summary.md`, and sends the same summary to **your own WhatsApp chat** so you can read it in WhatsApp Web.
 
 ## Setup
 
@@ -33,19 +33,23 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ## Run
 
-One summary (connects, waits briefly for chats, writes `latest-summary.md`, exits):
+Stay connected like WhatsApp Web, store incoming chats, and send a summary to yourself every 5 minutes:
 
 ```bash
 npm run start
 ```
 
-Keep running, store messages continuously, and re-summarize every 5 minutes:
+Leave this window open. Then open [WhatsApp Web](https://web.whatsapp.com) and look at the chat with **yourself** — that is where the “most important” summary appears.
+
+One-shot (connect, summarize, send, then exit):
 
 ```bash
-npm run start:watch
+npm run start:once
 ```
 
-First run prints a QR code. On your phone: **WhatsApp → Settings → Linked devices → Link a device**, then scan it.
+**Phone vs WhatsApp Web:** WhatsApp still requires the **phone app once** to link a new device. WhatsApp Web cannot scan the QR. After that first link, this tool stays logged in on this PC (session in `./auth`) and you can ignore the phone for daily use.
+
+First run prints a QR code. On the phone that owns the number: **WhatsApp → Settings → Linked devices → Link a device**, then scan it.
 
 ## Re-auth
 
@@ -61,7 +65,7 @@ Do not commit `auth/`, `.env`, or `messages.db`. They are gitignored.
 
 | Path | Role |
 | --- | --- |
-| `src/index.ts` | Startup, one-shot vs `--watch` schedule |
+| `src/index.ts` | Startup; stays online unless `--once` |
 | `src/whatsapp.ts` | Baileys connection, QR login, message listener |
 | `src/db.ts` | SQLite schema and last-2-hours query |
 | `src/summarize.ts` | Claude ranking + markdown summary |
