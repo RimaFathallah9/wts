@@ -18,7 +18,7 @@ Connects to your WhatsApp account via WhatsApp Web, stores incoming text (and me
 
 ## Setup
 
-You need Node.js 18+ (Windows: if `better-sqlite3` fails to install, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload).
+You need **Node.js 20 or newer** (22 LTS is a good choice). Check with `node -v`. Windows: if `better-sqlite3` fails to install after upgrading Node, install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload.
 
 ```bash
 npm install
