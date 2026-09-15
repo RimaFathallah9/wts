@@ -1,0 +1,10 @@
+node_modules/
+dist/
+auth/
+.env
+*.db
+*.db-wal
+*.db-shm
+latest-summary.md
+.DS_Store
+Thumbs.db
